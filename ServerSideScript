@@ -1,0 +1,300 @@
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+local TweenService = game:GetService("TweenService")
+local PhysicsService = game:GetService("PhysicsService")
+
+local Projectile = {}
+Projectile.__index = Projectile
+
+PhysicsService:CreateCollisionGroup("Projectile")
+PhysicsService:CollisionGroupSetCollidable("Projectile", "Projectile", false)
+
+local function calculateDragForce(velocity, dragCoefficient, crossSectionArea)
+	local airDensity = 1.225
+	local speed = velocity.Magnitude
+	return -0.5 * airDensity * speed^2 * dragCoefficient * crossSectionArea * velocity.Unit
+end
+
+local function createSphereCFrame(position, velocity)
+	return CFrame.new(position) * CFrame.Angles(
+		velocity.Y/1000, 
+		velocity.X/1000, 
+		velocity.Z/1000
+	)
+end
+
+function Projectile.new(config)
+	local self = setmetatable({}, Projectile)
+	self.config = {
+		projectileType = config.type or "standard",
+		launchCFrame = config.launchCFrame or CFrame.new(),
+		speed = config.speed or 150,
+		gravity = config.gravity or Vector3.new(0, -98.1, 0),
+		lifespan = config.lifespan or 10,
+		explosionRadius = config.explosionRadius or 15,
+		damage = config.damage or 75,
+		dragCoefficient = config.drag or 0.1,
+		crossSectionArea = config.area or 0.03,
+		tracerColor = config.color or Color3.new(1, 0.5, 0),
+		canRicochet = config.ricochet or false,
+		ricochetAngle = math.rad(config.ricochetAngle or 45),
+		maxRicochets = config.maxRicochets or 3
+	}
+	self.ricochetCount = 0
+	self.active = true
+	self.velocity = config.initialVelocity
+	self.lastPosition = self.config.launchCFrame.Position
+	self.startTime = os.clock() 
+
+	self:initializeProjectile()
+	self:createTrailSystem()
+	self:createParticleEmitter()
+	
+	self.heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
+		self:updateProjectile(dt)
+	end)
+	return self
+end
+
+function Projectile:initializeProjectile()
+	self.projectile = Instance.new("Part")
+	self.projectile.Name = "Projectile_"..self.config.projectileType
+	self.projectile.Size = Vector3.new(0.4, 0.4, 1.5)
+	self.projectile.Color = self.config.tracerColor
+	self.projectile.Material = Enum.Material.Neon
+	self.projectile.CFrame = self.config.launchCFrame
+	self.projectile.Anchored = true
+	self.projectile.CanCollide = false
+	PhysicsService:SetPartCollisionGroup(self.projectile, "Projectile")
+	self.projectile.Parent = workspace
+
+	self.hitbox = Instance.new("Part")
+	self.hitbox.Size = Vector3.new(1.2, 1.2, 2)
+	self.hitbox.Transparency = 1
+	self.hitbox.CanCollide = false
+	self.hitbox.Parent = self.projectile
+
+	self.sound = Instance.new("Sound")
+	self.sound.SoundId = "rbxassetid://278062209"
+	self.sound.Volume = 0.6
+	self.sound.Parent = self.projectile
+	self.sound:Play()
+end
+
+function Projectile:createTrailSystem()
+	self.trail = Instance.new("Trail")
+	self.trail.Attachment0 = Instance.new("Attachment", self.projectile)
+	self.trail.Attachment1 = Instance.new("Attachment", self.projectile)
+	self.trail.Color = ColorSequence.new(self.config.tracerColor)
+	self.trail.LightEmission = 0.8
+	self.trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0),
+		NumberSequenceKeypoint.new(1, 1)
+	})
+	self.trail.Parent = self.projectile
+end
+
+function Projectile:createParticleEmitter()
+	self.particles = Instance.new("ParticleEmitter")
+	self.particles.Color = ColorSequence.new(self.config.tracerColor)
+	self.particles.Size = NumberSequence.new(0.2)
+	self.particles.LightEmission = 0.6
+	self.particles.Speed = NumberRange.new(2)
+	self.particles.Parent = self.projectile
+end
+
+function Projectile:updateProjectile(dt)
+	if not self.active then return end
+	local currentTime = os.clock() - self.startTime
+	local dragForce = calculateDragForce(self.velocity, self.config.dragCoefficient, self.config.crossSectionArea)
+	local acceleration = self.config.gravity + dragForce
+	self.velocity += acceleration * dt
+	local newPosition = self.projectile.Position + self.velocity * dt
+	local direction = (newPosition - self.lastPosition).Unit
+	self.projectile.CFrame = createSphereCFrame(newPosition, self.velocity)
+	local collisionData = self:checkCollision(newPosition)
+	if collisionData then
+		self:handleCollision(collisionData, direction)
+	end
+	self.lastPosition = newPosition
+	if os.clock() - self.startTime > self.config.lifespan then
+		self:createDelayedExplosion()
+	end
+end
+
+function Projectile:checkCollision(targetPosition)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterDescendantsInstances = {self.projectile}
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+	raycastParams.IgnoreWater = true
+	local rayResult = workspace:Raycast(self.lastPosition, (targetPosition - self.lastPosition), raycastParams)
+	if rayResult and rayResult.Instance then
+		return {
+			position = rayResult.Position,
+			normal = rayResult.Normal,
+			instance = rayResult.Instance
+		}
+	end
+	return nil
+end
+
+function Projectile:handleCollision(collisionData, direction)
+	if self.config.canRicochet and self.ricochetCount < self.config.maxRicochets then
+		local surfaceNormal = collisionData.normal
+		local dotProduct = direction:Dot(surfaceNormal)
+		if math.abs(dotProduct) > math.cos(self.config.ricochetAngle) then
+			self.velocity = self.velocity - 2 * direction:Dot(surfaceNormal) * surfaceNormal
+			self.ricochetCount += 1
+			self:createRicochetEffect(collisionData.position)
+			return
+		end
+	end
+	self:createExplosionEffect(collisionData.position)
+	self:applyAreaDamage(collisionData.position)
+	self:destroyProjectile()
+end
+
+function Projectile:createRicochetEffect(position)
+	local sparkEmitter = Instance.new("ParticleEmitter")
+	sparkEmitter.Color = ColorSequence.new(Color3.new(1, 0.8, 0.4))
+	sparkEmitter.Size = NumberSequence.new(0.3)
+	sparkEmitter.Lifetime = NumberRange.new(0.3)
+	sparkEmitter.Speed = NumberRange.new(8)
+	sparkEmitter.Parent = workspace.Terrain
+	sparkEmitter:Emit(15)
+	Debris:AddItem(sparkEmitter, 1)
+end
+
+function Projectile:createExplosionEffect(epicenter)
+	local explosion = Instance.new("Explosion")
+	explosion.BlastPressure = 5000
+	explosion.BlastRadius = self.config.explosionRadius
+	explosion.Position = epicenter
+	explosion.Parent = workspace
+
+	local firePart = Instance.new("Part")
+	firePart.Size = Vector3.new(1,1,1)
+	firePart.Anchored = true
+	firePart.CanCollide = false
+	firePart.Color = Color3.new(1, 0.3, 0)
+	firePart.Material = Enum.Material.Neon
+	firePart.CFrame = CFrame.new(epicenter)
+
+	local fire = Instance.new("Fire")
+	fire.Heat = 15
+	fire.Size = 8
+	fire.Parent = firePart
+
+	Debris:AddItem(firePart, 2)
+end
+
+function Projectile:applyAreaDamage(epicenter)
+	local damageParts = workspace:GetPartsInPart(self.hitbox)
+	for _, part in pairs(damageParts) do
+		if part.Parent:FindFirstChild("Humanoid") then
+			local humanoid = part.Parent.Humanoid
+			local distance = (part.Position - epicenter).Magnitude
+			local damage = self.config.damage * (1 - math.clamp(distance/self.config.explosionRadius, 0, 1))
+			humanoid:TakeDamage(damage)
+		end
+	end
+end
+
+function Projectile:createDelayedExplosion()
+	self.active = false
+	self.projectile.Transparency = 1
+	self.trail.Enabled = false
+	delay(0.5, function()
+		self:createExplosionEffect(self.projectile.Position)
+		self:applyAreaDamage(self.projectile.Position)
+		self:destroyProjectile()
+	end)
+end
+
+function Projectile:destroyProjectile()
+	self.active = false
+	self.heartbeatConnection:Disconnect()
+	Debris:AddItem(self.projectile, 1)
+end
+
+local function createLaunchPad()
+	local pad = Instance.new("Part")
+	pad.Size = Vector3.new(8, 1, 8)
+	pad.Position = Vector3.new(0, 5, 0)
+	pad.Anchored = true
+	pad.Color = Color3.new(1, 0, 0)
+	pad.Material = Enum.Material.Neon
+	pad.Parent = workspace
+
+	local click = Instance.new("ClickDetector")
+	click.Parent = pad
+
+	click.MouseClick:Connect(function(player)
+		local lookDir = pad.CFrame.LookVector
+		Projectile.new({
+			type = "rocket",
+			launchCFrame = pad.CFrame + Vector3.new(0, 2, 0),
+			initialVelocity = lookDir * 200,
+			gravity = Vector3.new(0, -30, 0),
+			explosionRadius = 12,
+			damage = 60,
+			ricochet = true,
+			drag = 0.2,
+			color = Color3.new(1, 0.3, 0.1)
+		})
+	end)
+end
+
+
+local function createTestDummy()
+	local dummy = Instance.new("Model")
+	dummy.Name = "TestDummy"
+
+	-- Create humanoid
+	local humanoid = Instance.new("Humanoid")
+	humanoid.MaxHealth = 100
+	humanoid.Health = 100
+	humanoid.Parent = dummy
+
+	-- Create dummy parts
+	local head = Instance.new("Part")
+	head.Name = "Head"
+	head.Size = Vector3.new(2, 2, 2)
+	head.Color = Color3.fromRGB(0, 255, 0)
+	head.Material = Enum.Material.Neon
+	head.Parent = dummy
+
+	local torso = Instance.new("Part")
+	torso.Name = "Torso"
+	torso.Size = Vector3.new(4, 6, 2)
+	torso.Color = Color3.fromRGB(0, 200, 0)
+	torso.Parent = dummy
+
+	-- Position parts
+	local dummyPosition = Vector3.new(2.43, 0.49, -104.754)
+	head.CFrame = CFrame.new(dummyPosition + Vector3.new(0, 5, 0))
+	torso.CFrame = CFrame.new(dummyPosition + Vector3.new(0, 2, 0))
+
+	-- Weld parts together
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = head
+	weld.Part1 = torso
+	weld.Parent = dummy
+
+	dummy.PrimaryPart = torso
+	dummy.Parent = workspace
+
+	-- Add damage display
+	humanoid.Died:Connect(function()
+		print("Dummy destroyed!")
+		task.wait(2)
+		humanoid.Health = humanoid.MaxHealth
+	end)
+
+	return dummy
+end
+
+createTestDummy()
+
+createLaunchPad()
+print("Advanced Projectile System Initialized")
