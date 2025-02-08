@@ -1,300 +1,301 @@
-local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
-local TweenService = game:GetService("TweenService")
-local PhysicsService = game:GetService("PhysicsService")
+local Debris = game:GetService("Debris") -- Defines Debris serv.
+local DS = game:GetService("DataStoreService")
+local TS = game:GetService("TweenService")
+local PathfindingService = game:GetService("PathfindingService")
+local DataStoreMain = DS:GetDataStore("Main") -- Imports a data store
+local REvents = game.ReplicatedStorage.RemoteEvents
+local Commands = {} --Main Commands Table
+local AnimInstance = Instance.new("Animation") -- make new anim instance
+AnimInstance.AnimationId = "rbxassetid://106938228468653" -- Set to a waving animation
+AnimInstance.Parent = workspace
 
-local Projectile = {}
-Projectile.__index = Projectile
-
-PhysicsService:CreateCollisionGroup("Projectile")
-PhysicsService:CollisionGroupSetCollidable("Projectile", "Projectile", false)
-
-local function calculateDragForce(velocity, dragCoefficient, crossSectionArea)
-	local airDensity = 1.225
-	local speed = velocity.Magnitude
-	return -0.5 * airDensity * speed^2 * dragCoefficient * crossSectionArea * velocity.Unit
+local function SendServerResponse(plr,txt)
+	REvents.ServerMessage:FireClient(plr,txt) -- Send server reply, to a simple local script, for some functions
 end
 
-local function createSphereCFrame(position, velocity)
-	return CFrame.new(position) * CFrame.Angles(
-		velocity.Y/1000, 
-		velocity.X/1000, 
-		velocity.Z/1000
-	)
+Commands.die = function(plr) -- Command that kills the player
+	plr.Character.Humanoid.Health = 0 -- Set Health to 0
 end
 
-function Projectile.new(config)
-	local self = setmetatable({}, Projectile)
-	self.config = {
-		projectileType = config.type or "standard",
-		launchCFrame = config.launchCFrame or CFrame.new(),
-		speed = config.speed or 150,
-		gravity = config.gravity or Vector3.new(0, -98.1, 0),
-		lifespan = config.lifespan or 10,
-		explosionRadius = config.explosionRadius or 15,
-		damage = config.damage or 75,
-		dragCoefficient = config.drag or 0.1,
-		crossSectionArea = config.area or 0.03,
-		tracerColor = config.color or Color3.new(1, 0.5, 0),
-		canRicochet = config.ricochet or false,
-		ricochetAngle = math.rad(config.ricochetAngle or 45),
-		maxRicochets = config.maxRicochets or 3
+
+Commands.grav = function(plr,arg)
+	if not tonumber(arg) or tonumber(arg)<=0 then -- Make sure its a number and a postive one (you cannot have negative gravity)
+		return
+	end
+	workspace.Gravity = arg
+end
+
+
+Commands.teleport = function(plr,arg)  -- teleport player in random place, the argument is how far they will teleport from themselfs
+	if not tonumber(arg) then
+		return
+	end
+	plr.Character:PivotTo(plr.Character.HumanoidRootPart.CFrame + Vector3.new(math.random(arg*-1,arg),0,math.random(arg*-1,arg)))
+end
+
+
+Commands.run = function(plr) -- Command that makes the player move forward, with a LinearVelocity
+	local rpart = plr.Character.HumanoidRootPart -- for code's lenght sake
+	local Veloc = Instance.new("LinearVelocity") -- Makes a new LinearVelocity
+	local att = rpart.RootAttachment -- FindRootAttachment
+	Veloc.Attachment0 = att -- set attachment to a new one inside primpart
+	Veloc.MaxForce = math.huge -- not limiting force
+	Veloc.VectorVelocity =rpart.CFrame.LookVector * 40 -- So player runs forward
+	Veloc.Parent = plr.Character.HumanoidRootPart
+	Debris:AddItem(Veloc,2) -- Destroyed after 2 sec
+end
+
+
+Commands.part = function(plr) -- Random color part function
+	local Part = Instance.new("Part") -- Spawn part in workspace
+	Part.Position = plr.Character.HumanoidRootPart.Position + Vector3.new(0,3,0) -- Set part's position a top of the player
+	Part.Color = Color3.fromRGB(math.random(1,255),math.random(1,255),math.random(1,255)) -- Just For Fun set random color
+	Part.Parent = workspace	
+end
+
+
+Commands.savelast = function(plr) -- Command, to showcase simple Data store manipulation
+	DataStoreMain:SetAsync("LastVisitor",plr.Name)  -- Save it
+end
+
+
+Commands.displaylast = function(plr)  -- Command to display last saved visitor
+	SendServerResponse(plr,DataStoreMain:GetAsync("LastVisitor")) -- read the value and send server message
+end
+
+
+Commands.wave = function(plr) -- command to showcase animation play
+	plr.Character.Humanoid.Animator:LoadAnimation(AnimInstance):Play() -- Actually Play it
+end
+
+
+Commands.ragdoll = function(plr) -- command to make the player ragdoll
+	for i,joint in plr.Character:GetDescendants() do -- Check all desecandts
+		if joint:IsA("Motor6D") then -- To see if its a motor 6
+			local socketC = Instance.new("BallSocketConstraint") -- New Socket
+			local att0 = Instance.new("Attachment") -- New attachments for the sockets
+			local att1 = Instance.new("Attachment")
+			att0.CFrame = joint.C0 -- Set attachment's CFrame's to match the existing ones
+			att1.CFrame = joint.C1
+			att0.Parent = joint.Part0
+			att1.Parent = joint.Part1
+			socketC.Attachment0 = att0 -- set Sockets attachments to the one's that were just made
+			socketC.Attachment1 = att1
+			socketC.TwistLimitsEnabled = true -- Set limits so the player dosent fly away 
+			socketC.LimitsEnabled = true
+			socketC.Parent = joint.Parent
+			joint.Enabled = false -- Disable Motor6D
+		end
+	end
+	REvents.SetHumanState:FireClient(plr,Enum.HumanoidStateType.Physics)
+end
+
+
+Commands.meteor = function(plr) -- make meteors that fall at diffrent speeds
+	for i=1,20 do		--Loop spawning meteors
+		local meteor = Instance.new("Part")
+		meteor.Size = Vector3.new(5,5,5) 
+		meteor.Color = Color3.fromRGB(255, 149, 0)
+		meteor.Material = Enum.Material.SmoothPlastic
+		meteor.CFrame = CFrame.new(math.random(-250,250),200,math.random(-250,250)) -- spawn at random positions
+		local attach = Instance.new("Attachment") -- Make an attachment
+		attach.Parent = meteor
+		local Vel = Instance.new("LinearVelocity") -- Make an Linear Velocity
+		Vel.Parent = workspace
+		Vel.Attachment0 = attach -- Since LineanVelocity requires an Attachment
+		Vel.MaxForce = math.huge -- Do not limit max force
+		Vel.VectorVelocity = Vector3.new(0, math.random(-125, -75), 0) -- Set Velocity to random 
+		local exploded = false -- Value that makes sure it dosent explode more than once
+		meteor.Touched:Connect(function() -- make the meteor explode
+			if exploded then
+				return -- if exploded end the command
+			end
+			Vel:Destroy() -- destroy velocity, it landed alr
+			exploded = true
+			local Explosion = Instance.new("Explosion") -- Add an explosion
+			Explosion.Position = meteor.Position -- Set its position ot the one of the Meteor's
+			Explosion.Parent = workspace
+			Debris:AddItem(meteor,2.5) -- Remove with Debris after 4.5 sec
+		end) 
+		meteor.Parent = workspace
+	end
+end
+
+
+local radius = 10 -- set radius
+
+Commands.orbit = function(plr) -- Some math functionality, orbiting balls around player (sin/cos)
+	local rpart = plr.Character.HumanoidRootPart -- for code's lenght sake
+	local BallTab = {} -- Tables to store balls
+	for i=1,5 do -- Loop that spawns 5 balls 
+		local Ball = Instance.new("Part") -- spawning Ball to orbit
+		Ball.Anchored = true
+		Ball.Size = Vector3.new(3,3,3) 
+		Ball.Shape = Enum.PartType.Ball -- Make it a Ball
+		Ball.Material = Enum.Material.SmoothPlastic -- make it smooth plastic
+		Ball.Color = Color3.fromRGB(255, 0, 0)
+		Ball.CanCollide = false -- Make the ball not colide so it dosen't act weirdly
+		table.insert(BallTab,Ball) -- Insert the Ball to the table
+		Debris:AddItem(Ball,7.5)
+		Ball.Parent = workspace
+	end
+	local angle = 0
+	while true do -- Parent Loop (not actually infinite)
+		for i,Ball in BallTab do
+			local AnglePersonal = angle + (( math.pi *2 / #BallTab) * (i - 1)) -- Caluclates the perfect position for the balls
+			if not Ball.Parent then
+				return -- If ball has been destroyed (Parent is Nil) then stop the loops
+			end
+			Ball.Position =  Vector3.new(rpart.Position.X + radius*math.cos(AnglePersonal),rpart.Position.Y,rpart.Position.Z + radius*math.sin(AnglePersonal)) -- Calculate the orbit position
+		end
+		angle += 0.025 -- Increases Angle
+		task.wait(0.01)
+	end
+end
+
+
+Commands.settime = function(plr,arg) -- A command that sets the time of day
+	local DynamicTime = { -- Table with words to times
+		["morning"] = 8,
+		["noon"] = 12,
+		["afternoon"] = 16,
+		["evening"]= 19,
+		["midnight"] = 0,
+		["dawn"] = 6, 
 	}
-	self.ricochetCount = 0
-	self.active = true
-	self.velocity = config.initialVelocity
-	self.lastPosition = self.config.launchCFrame.Position
-	self.startTime = os.clock() 
-
-	self:initializeProjectile()
-	self:createTrailSystem()
-	self:createParticleEmitter()
-	
-	self.heartbeatConnection = RunService.Heartbeat:Connect(function(dt)
-		self:updateProjectile(dt)
-	end)
-	return self
-end
-
-function Projectile:initializeProjectile()
-	self.projectile = Instance.new("Part")
-	self.projectile.Name = "Projectile_"..self.config.projectileType
-	self.projectile.Size = Vector3.new(0.4, 0.4, 1.5)
-	self.projectile.Color = self.config.tracerColor
-	self.projectile.Material = Enum.Material.Neon
-	self.projectile.CFrame = self.config.launchCFrame
-	self.projectile.Anchored = true
-	self.projectile.CanCollide = false
-	PhysicsService:SetPartCollisionGroup(self.projectile, "Projectile")
-	self.projectile.Parent = workspace
-
-	self.hitbox = Instance.new("Part")
-	self.hitbox.Size = Vector3.new(1.2, 1.2, 2)
-	self.hitbox.Transparency = 1
-	self.hitbox.CanCollide = false
-	self.hitbox.Parent = self.projectile
-
-	self.sound = Instance.new("Sound")
-	self.sound.SoundId = "rbxassetid://278062209"
-	self.sound.Volume = 0.6
-	self.sound.Parent = self.projectile
-	self.sound:Play()
-end
-
-function Projectile:createTrailSystem()
-	self.trail = Instance.new("Trail")
-	self.trail.Attachment0 = Instance.new("Attachment", self.projectile)
-	self.trail.Attachment1 = Instance.new("Attachment", self.projectile)
-	self.trail.Color = ColorSequence.new(self.config.tracerColor)
-	self.trail.LightEmission = 0.8
-	self.trail.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0),
-		NumberSequenceKeypoint.new(1, 1)
-	})
-	self.trail.Parent = self.projectile
-end
-
-function Projectile:createParticleEmitter()
-	self.particles = Instance.new("ParticleEmitter")
-	self.particles.Color = ColorSequence.new(self.config.tracerColor)
-	self.particles.Size = NumberSequence.new(0.2)
-	self.particles.LightEmission = 0.6
-	self.particles.Speed = NumberRange.new(2)
-	self.particles.Parent = self.projectile
-end
-
-function Projectile:updateProjectile(dt)
-	if not self.active then return end
-	local currentTime = os.clock() - self.startTime
-	local dragForce = calculateDragForce(self.velocity, self.config.dragCoefficient, self.config.crossSectionArea)
-	local acceleration = self.config.gravity + dragForce
-	self.velocity += acceleration * dt
-	local newPosition = self.projectile.Position + self.velocity * dt
-	local direction = (newPosition - self.lastPosition).Unit
-	self.projectile.CFrame = createSphereCFrame(newPosition, self.velocity)
-	local collisionData = self:checkCollision(newPosition)
-	if collisionData then
-		self:handleCollision(collisionData, direction)
-	end
-	self.lastPosition = newPosition
-	if os.clock() - self.startTime > self.config.lifespan then
-		self:createDelayedExplosion()
+	if DynamicTime[arg] then -- if arguemnt is in the times table
+		game.Lighting.TimeOfDay = DynamicTime[arg] -- set time of day to it 
 	end
 end
 
-function Projectile:checkCollision(targetPosition)
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterDescendantsInstances = {self.projectile}
-	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
-	raycastParams.IgnoreWater = true
-	local rayResult = workspace:Raycast(self.lastPosition, (targetPosition - self.lastPosition), raycastParams)
-	if rayResult and rayResult.Instance then
-		return {
-			position = rayResult.Position,
-			normal = rayResult.Normal,
-			instance = rayResult.Instance
-		}
+
+Commands.size = function(plr,arg) -- Commands to scale player
+	if not tonumber(arg) then -- Makes sures that the  argument is a number
+		return 
 	end
-	return nil
-end
-
-function Projectile:handleCollision(collisionData, direction)
-	if self.config.canRicochet and self.ricochetCount < self.config.maxRicochets then
-		local surfaceNormal = collisionData.normal
-		local dotProduct = direction:Dot(surfaceNormal)
-		if math.abs(dotProduct) > math.cos(self.config.ricochetAngle) then
-			self.velocity = self.velocity - 2 * direction:Dot(surfaceNormal) * surfaceNormal
-			self.ricochetCount += 1
-			self:createRicochetEffect(collisionData.position)
-			return
-		end
+	if plr.Character.Humanoid.RigType ~= Enum.HumanoidRigType.R15 then -- makes sure that player is R15, if not display the notification
+		SendServerResponse(plr,"Size Scaling is exlusive to R15 rigs") -- Send message
+		return
 	end
-	self:createExplosionEffect(collisionData.position)
-	self:applyAreaDamage(collisionData.position)
-	self:destroyProjectile()
-end
-
-function Projectile:createRicochetEffect(position)
-	local sparkEmitter = Instance.new("ParticleEmitter")
-	sparkEmitter.Color = ColorSequence.new(Color3.new(1, 0.8, 0.4))
-	sparkEmitter.Size = NumberSequence.new(0.3)
-	sparkEmitter.Lifetime = NumberRange.new(0.3)
-	sparkEmitter.Speed = NumberRange.new(8)
-	sparkEmitter.Parent = workspace.Terrain
-	sparkEmitter:Emit(15)
-	Debris:AddItem(sparkEmitter, 1)
-end
-
-function Projectile:createExplosionEffect(epicenter)
-	local explosion = Instance.new("Explosion")
-	explosion.BlastPressure = 5000
-	explosion.BlastRadius = self.config.explosionRadius
-	explosion.Position = epicenter
-	explosion.Parent = workspace
-
-	local firePart = Instance.new("Part")
-	firePart.Size = Vector3.new(1,1,1)
-	firePart.Anchored = true
-	firePart.CanCollide = false
-	firePart.Color = Color3.new(1, 0.3, 0)
-	firePart.Material = Enum.Material.Neon
-	firePart.CFrame = CFrame.new(epicenter)
-
-	local fire = Instance.new("Fire")
-	fire.Heat = 15
-	fire.Size = 8
-	fire.Parent = firePart
-
-	Debris:AddItem(firePart, 2)
-end
-
-function Projectile:applyAreaDamage(epicenter)
-	local damageParts = workspace:GetPartsInPart(self.hitbox)
-	for _, part in pairs(damageParts) do
-		if part.Parent:FindFirstChild("Humanoid") then
-			local humanoid = part.Parent.Humanoid
-			local distance = (part.Position - epicenter).Magnitude
-			local damage = self.config.damage * (1 - math.clamp(distance/self.config.explosionRadius, 0, 1))
-			humanoid:TakeDamage(damage)
+	for i,Value in plr.Character.Humanoid:GetChildren() do -- Gets all values inside humanoid
+		if Value:IsA("NumberValue") then -- Makes sure its a Number Value (scaling values)
+			Value.Value = arg -- Set the value to the argument
 		end
 	end
 end
 
-function Projectile:createDelayedExplosion()
-	self.active = false
-	self.projectile.Transparency = 1
-	self.trail.Enabled = false
-	delay(0.5, function()
-		self:createExplosionEffect(self.projectile.Position)
-		self:applyAreaDamage(self.projectile.Position)
-		self:destroyProjectile()
+
+Commands.followers = function(plr, arg) -- Create an x amount of dummies that follow you for 15 seconds
+	if not tonumber(arg) or tonumber(arg) % 1 ~= 0 or tonumber(arg) <= 0 then -- Ensure the argument is a positive integer
+		return
+	end
+
+	local function MakeAFollower()
+		local Path = PathfindingService:CreatePath()
+
+		local npc = game.Players:CreateHumanoidModelFromUserId(26266254) -- create a character with the apperance of userId 26266254 and 
+		npc.Parent = game.Workspace
+		npc.Name = "Dummy"
+
+		local rootPart = npc.HumanoidRootPart
+		local humanoid = npc.Humanoid
+		npc:PivotTo(CFrame.new(math.random(-250,250),0,math.random(-250,250))) --assign npc to random position on map
+		
+		-- Touched event to damage players
+		humanoid.Touched:Connect(function(touchingPart)
+			if not touchingPart.Parent then
+				return
+			end
+
+			if touchingPart.Parent:IsA("Model") and touchingPart.Parent:FindFirstChild("Humanoid") then
+				local player = game:GetService("Players"):GetPlayerFromCharacter(touchingPart.Parent)
+				if player then
+					player.Character.Humanoid:TakeDamage(100) -- Damage the player
+				end
+			end
+		end)
+
+		-- Function to make the follower move towards the player
+		local function Follower()
+			Path:ComputeAsync(rootPart.Position, plr.Character.HumanoidRootPart.Position) -- Calculate path to the player
+			if #Path:GetWaypoints() >= 3 and npc.Parent then -- If path has at least 3 waypoints
+				humanoid:MoveTo(Path:GetWaypoints()[3].Position) -- Move to the third waypoint
+			elseif #Path:GetWaypoints() < 3 and plr.Character and npc.Parent then -- If path has fewer than 3 waypoints
+				humanoid:MoveTo(plr.Character.HumanoidRootPart.Position) -- Move directly to the player
+			end
+		end
+
+		-- Start the follow behavior
+		task.spawn(function()
+			while npc.Parent and plr.Character do
+				Follower()
+				task.wait()
+			end
+		end)
+
+		-- Clean up the follower after 15 seconds
+		Debris:AddItem(npc, 15)
+	end
+
+	-- Spawn the specified number of followers
+	for i = 1, arg do
+		MakeAFollower()
+	end
+end
+
+
+Commands.agemeta = function(plr,arg) -- Simple Metatable
+	local TableMetaData = {} -- The actual meta table
+	local DataPrototype = {
+		Age = 21
+	}  -- the "Master" table
+	TableMetaData.__index = DataPrototype -- Set tables index to the prototype
+	local ProperData = {}
+	setmetatable(ProperData,TableMetaData) -- Set the metatable to the TableMetaData
+	SendServerResponse(plr,"Age data before setting the arg : "..ProperData.Age) -- Display pre set Age
+	if tonumber(arg) then -- Make sure the argument is a number, if not then it wont change
+		ProperData.Age = arg
+	end	
+	SendServerResponse(plr,"Age data after setting the arg : "..ProperData.Age) -- Display post set Age
+end
+
+
+Commands.wraptime = function(plr)-- Creates a funny time wrap effect
+	local Human = plr.Character.Humanoid -- Defines Huanoid
+	local shockwave = Instance.new("Part") -- All part configuration, described in other parts
+	shockwave.Shape = Enum.PartType.Ball
+	shockwave.CFrame = plr.Character.HumanoidRootPart.CFrame
+	shockwave.Color = Color3.fromRGB(255,255,255)
+	shockwave.Transparency = 0.5
+	shockwave.Size = Vector3.new(0,0,0)
+	shockwave.Material = Enum.Material.SmoothPlastic
+	shockwave.CanCollide = false
+	shockwave.Anchored = true
+	shockwave.CastShadow = false
+	shockwave.Parent = workspace
+	TS:Create(shockwave,TweenInfo.new(5),{Size = Vector3.new(200,200,200),Transparency = 1}):Play() -- Make it grow and become invisible
+	local Blur = Instance.new("BlurEffect")
+	Blur.Size = 15
+	Blur.Parent = game.Lighting
+	TS:Create(Blur,TweenInfo.new(5),{Size = 0}):Play()
+	Debris:AddItem(shockwave,5)
+	Debris:AddItem(Blur,5)
+	Human.JumpPower = 75
+	workspace.Gravity = 30
+	task.wait(8)
+	workspace.Gravity = 196.2
+	if Human then
+		Human.JumpPower = 50
+	end
+end
+
+
+game.Players.PlayerAdded:Connect(function(plr)
+	plr.Chatted:Connect(function(msg) -- Event of player sending a message
+		msg = string.lower(msg)
+		local SplitToArgs = string.split(string.split(msg,"/")[2] or ""," ") -- splits the message
+		if plr.Character and msg:match("/") and Commands[SplitToArgs[1]] then -- Makes sure that the message contains / and a such Command exsists (also makes sure player has a character, just to make it easier)
+			Commands[SplitToArgs[1]](plr,SplitToArgs[2])
+		end
 	end)
-end
-
-function Projectile:destroyProjectile()
-	self.active = false
-	self.heartbeatConnection:Disconnect()
-	Debris:AddItem(self.projectile, 1)
-end
-
-local function createLaunchPad()
-	local pad = Instance.new("Part")
-	pad.Size = Vector3.new(8, 1, 8)
-	pad.Position = Vector3.new(0, 5, 0)
-	pad.Anchored = true
-	pad.Color = Color3.new(1, 0, 0)
-	pad.Material = Enum.Material.Neon
-	pad.Parent = workspace
-
-	local click = Instance.new("ClickDetector")
-	click.Parent = pad
-
-	click.MouseClick:Connect(function(player)
-		local lookDir = pad.CFrame.LookVector
-		Projectile.new({
-			type = "rocket",
-			launchCFrame = pad.CFrame + Vector3.new(0, 2, 0),
-			initialVelocity = lookDir * 200,
-			gravity = Vector3.new(0, -30, 0),
-			explosionRadius = 12,
-			damage = 60,
-			ricochet = true,
-			drag = 0.2,
-			color = Color3.new(1, 0.3, 0.1)
-		})
-	end)
-end
-
-
-local function createTestDummy()
-	local dummy = Instance.new("Model")
-	dummy.Name = "TestDummy"
-
-	-- Create humanoid
-	local humanoid = Instance.new("Humanoid")
-	humanoid.MaxHealth = 100
-	humanoid.Health = 100
-	humanoid.Parent = dummy
-
-	-- Create dummy parts
-	local head = Instance.new("Part")
-	head.Name = "Head"
-	head.Size = Vector3.new(2, 2, 2)
-	head.Color = Color3.fromRGB(0, 255, 0)
-	head.Material = Enum.Material.Neon
-	head.Parent = dummy
-
-	local torso = Instance.new("Part")
-	torso.Name = "Torso"
-	torso.Size = Vector3.new(4, 6, 2)
-	torso.Color = Color3.fromRGB(0, 200, 0)
-	torso.Parent = dummy
-
-	-- Position parts
-	local dummyPosition = Vector3.new(2.43, 0.49, -104.754)
-	head.CFrame = CFrame.new(dummyPosition + Vector3.new(0, 5, 0))
-	torso.CFrame = CFrame.new(dummyPosition + Vector3.new(0, 2, 0))
-
-	-- Weld parts together
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = head
-	weld.Part1 = torso
-	weld.Parent = dummy
-
-	dummy.PrimaryPart = torso
-	dummy.Parent = workspace
-
-	-- Add damage display
-	humanoid.Died:Connect(function()
-		print("Dummy destroyed!")
-		task.wait(2)
-		humanoid.Health = humanoid.MaxHealth
-	end)
-
-	return dummy
-end
-
-createTestDummy()
-
-createLaunchPad()
-print("Advanced Projectile System Initialized")
+end)
