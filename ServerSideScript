@@ -1,196 +1,232 @@
---[[
-    MAIN SERVICE INITIALIZATION
-    Handles all service dependencies and core game components
---]]
-local function InitializeServices()
-    -- Core Roblox services
-    local Debris = game:GetService("Debris")
-    local DS = game:GetService("DataStoreService")
-    local TS = game:GetService("TweenService")
-    local PathfindingService = game:GetService("PathfindingService")
-    
-    -- Game components
-    local DataStoreMain = DS:GetDataStore("Main")
-    local REvents = game.ReplicatedStorage.RemoteEvents
-    local AnimInstance = Instance.new("Animation")
-    
-    -- Animation configuration
-    AnimInstance.AnimationId = "rbxassetid://106938228468653"
-    AnimInstance.Parent = workspace
+-- Trust Me I Can't Make It Better Than This.
 
-    return {
-        Debris = Debris,
-        TS = TS,
-        PathfindingService = PathfindingService,
-        DataStoreMain = DataStoreMain,
-        REvents = REvents,
-        AnimInstance = AnimInstance
-    }
-end
+--==== Service Initialization ====--
+local services = {
+    Debris = game:GetService("Debris"),
+    DS = game:GetService("DataStoreService"),
+    TS = game:GetService("TweenService"),
+    Pathfinding = game:GetService("PathfindingService"),
+    REvents = game.ReplicatedStorage.RemoteEvents
+}
+services.DataStoreMain = services.DS:GetDataStore("Main")
+services.AnimInstance = Instance.new("Animation")
+services.AnimInstance.AnimationId = "rbxassetid://106938228468653"
+services.AnimInstance.Parent = workspace
 
---[[
-    UTILITY FUNCTIONS
-    Reusable helpers for common operations
---]]
+--==== Utility Module ====--
 local Utilities = {}
 
--- Sends formatted messages to player clients
-function Utilities.SendServerResponse(player, message)
+function Utilities.SendResponse(player, message)
     if player and player:IsDescendantOf(game.Players) then
-        REvents.ServerMessage:FireClient(player, message)
+        services.REvents.ServerMessage:FireClient(player, message)
     end
 end
 
--- Validates numerical input with optional range constraints
-function Utilities.ValidateNumber(input, minVal, maxVal)
+function Utilities.ValidateNumber(input, min, max)
     local num = tonumber(input)
-    local isValid = num and true or false
-    if minVal then isValid = isValid and (num >= minVal) end
-    if maxVal then isValid = isValid and (num <= maxVal) end
-    return isValid, num
+    return num and (not min or num >= min) and (not max or num <= max)
 end
 
--- Creates a basic part with configurable properties
-function Utilities.CreateBasicPart(cframe, size, color, options)
+function Utilities.CreatePart(cframe, props)
     local part = Instance.new("Part")
     part.CFrame = cframe
-    part.Size = size or Vector3.new(5, 5, 5)
-    part.Color = color or Color3.new(1, 1, 1)
+    part.Size = props.Size or Vector3.new(5,5,5)
+    part.Color = props.Color or Color3.new(1,1,1)
     part.Material = Enum.Material.SmoothPlastic
-    
-    -- Apply optional properties
-    if options then
-        part.Anchored = options.anchored or false
-        part.CanCollide = options.canCollide or true
-        part.Shape = options.shape or Enum.PartType.Block
-    end
-    
+    part.Anchored = props.Anchored or false
+    part.CanCollide = props.CanCollide or false
+    part.Shape = props.Shape or Enum.PartType.Block
     part.Parent = workspace
     return part
 end
 
---[[
-    PHYSICS HELPERS
-    Handles physics-based object creation and manipulation
---]]
-local PhysicsHelpers = {}
+--==== Physics Module ====--
+local Physics = {}
 
--- Applies linear velocity to an object with automatic cleanup
-function PhysicsHelpers.ApplyLinearVelocity(parent, attachment, velocity, lifetime)
+function Physics.ApplyVelocity(parent, attachment, velocity, duration)
     local linearVelocity = Instance.new("LinearVelocity")
     linearVelocity.Attachment0 = attachment
     linearVelocity.VectorVelocity = velocity
     linearVelocity.MaxForce = math.huge
     linearVelocity.Parent = parent
-    Debris:AddItem(linearVelocity, lifetime or 2)
-    return linearVelocity
+    services.Debris:AddItem(linearVelocity, duration or 2)
 end
 
--- Creates explosion effect at specified position
-function PhysicsHelpers.CreateExplosion(position)
+function Physics.CreateExplosion(position)
     local explosion = Instance.new("Explosion")
     explosion.Position = position
-    explosion.BlastRadius = 10
-    explosion.BlastPressure = 1000
+    explosion.BlastRadius = 15
     explosion.Parent = workspace
     return explosion
 end
 
---[[
-    CHARACTER MODIFICATION
-    Functions related to player character manipulation
---]]
-local CharacterModifiers = {}
+--==== Character Module ====--
+local Character = {}
 
--- Replaces Motor6D joints with BallSocketConstraints for ragdoll effect
-function CharacterModifiers.ConvertToRagdoll(character)
-    for _, joint in ipairs(character:GetDescendants()) do
+function Character.Ragdoll(humanoid)
+    for _, joint in ipairs(humanoid.Parent:GetDescendants()) do
         if joint:IsA("Motor6D") then
-            -- Create replacement constraints
             local att0 = Instance.new("Attachment")
             local att1 = Instance.new("Attachment")
             att0.CFrame = joint.C0
             att1.CFrame = joint.C1
             
-            local socket = Instance.new("BallSocketConstraint")
-            socket.Attachment0 = att0
-            socket.Attachment1 = att1
-            socket.TwistLimitsEnabled = true
+            local constraint = Instance.new("BallSocketConstraint")
+            constraint.Attachment0 = att0
+            constraint.Attachment1 = att1
+            constraint.TwistLimitsEnabled = true
             
-            -- Parent components
             att0.Parent = joint.Part0
             att1.Parent = joint.Part1
-            socket.Parent = joint.Parent
+            constraint.Parent = joint.Parent
             joint.Enabled = false
         end
     end
+    services.REvents.SetHumanState:FireClient(
+        game.Players:GetPlayerFromCharacter(humanoid.Parent),
+        Enum.HumanoidStateType.Physics
+    )
 end
 
--- Scales R15 character body parts uniformly
-function CharacterModifiers.ScaleCharacter(humanoid, scaleFactor)
-    if humanoid.RigType ~= Enum.HumanoidRigType.R15 then return end
-    
-    for _, valueObj in ipairs(humanoid:GetChildren()) do
-        if valueObj:IsA("NumberValue") then
-            valueObj.Value = scaleFactor
+function Character.ScaleR15(humanoid, scale)
+    if humanoid.RigType == Enum.HumanoidRigType.R15 then
+        for _, value in ipairs(humanoid:GetChildren()) do
+            if value:IsA("NumberValue") then
+                value.Value = scale
+            end
         end
     end
 end
 
---[[
-    COMMAND IMPLEMENTATIONS
-    Individual command implementations using the helper functions
---]]
+--==== Command Implementations ====--
 local Commands = {}
 
--- Kills the player's character
 function Commands.die(player)
     player.Character.Humanoid.Health = 0
 end
 
--- Modifies workspace gravity
 function Commands.grav(player, arg)
-    local isValid, value = Utilities.ValidateNumber(arg, 1)
-    if isValid then
-        workspace.Gravity = value
-        Utilities.SendServerResponse(player, "Gravity set to: " .. value)
+    if Utilities.ValidateNumber(arg, 1) then
+        workspace.Gravity = tonumber(arg)
+        Utilities.SendResponse(player, "Gravity set to: "..arg)
     end
 end
 
--- Creates orbiting parts around player
+function Commands.teleport(player, arg)
+    if Utilities.ValidateNumber(arg, 1) then
+        local range = tonumber(arg)
+        local offset = Vector3.new(
+            math.random(-range, range),
+            0,
+            math.random(-range, range)
+        )
+        player.Character:PivotTo(player.Character.HumanoidRootPart.CFrame + offset)
+    end
+end
+
+function Commands.run(player)
+    local rootPart = player.Character.HumanoidRootPart
+    Physics.ApplyVelocity(
+        rootPart,
+        rootPart.RootAttachment,
+        rootPart.CFrame.LookVector * 40
+    )
+end
+
+function Commands.part(player)
+    Utilities.CreatePart(
+        player.Character.HumanoidRootPart.Position + Vector3.new(0,3,0),
+        {
+            Color = Color3.fromRGB(
+                math.random(255),
+                math.random(255),
+                math.random(255)
+            ),
+            Anchored = true
+        }
+    )
+end
+
+function Commands.savelast(player)
+    services.DataStoreMain:SetAsync("LastVisitor", player.Name)
+    Utilities.SendResponse(player, "Saved as last visitor!")
+end
+
+function Commands.displaylast(player)
+    local last = services.DataStoreMain:GetAsync("LastVisitor") or "None"
+    Utilities.SendResponse(player, "Last visitor: "..last)
+end
+
+function Commands.wave(player)
+    local animator = player.Character.Humanoid.Animator
+    local animation = animator:LoadAnimation(services.AnimInstance)
+    animation:Play()
+end
+
+function Commands.ragdoll(player)
+    Character.Ragdoll(player.Character.Humanoid)
+end
+
+function Commands.meteor()
+    for _ = 1,20 do
+        local meteor = Utilities.CreatePart(
+            CFrame.new(
+                math.random(-250,250),
+                200,
+                math.random(-250,250)
+            ),
+            {
+                Color = Color3.fromRGB(255, 149, 0),
+                Anchored = false
+            }
+        )
+        
+        Physics.ApplyVelocity(
+            meteor,
+            meteor:WaitForChild("Attachment"),
+            Vector3.new(0, math.random(-125, -75), 0),
+            4.5
+        )
+
+        meteor.Touched:Once(function()
+            Physics.CreateExplosion(meteor.Position)
+            meteor:Destroy()
+        end)
+    end
+end
+
 function Commands.orbit(player)
     local rootPart = player.Character.HumanoidRootPart
-    local orbitalParts = {}
+    local orbitals = {}
     local radius = 10
 
-    -- Create orbital parts
-    for _ = 1, 5 do
-        local part = Utilities.CreateBasicPart(
-            rootPart.CFrame,
-            Vector3.new(3, 3, 3),
-            Color3.new(1, 0, 0),
-            {anchored = true, canCollide = false, shape = Enum.PartType.Ball}
-        )
-        table.insert(orbitalParts, part)
-        Debris:AddItem(part, 7.5)
+    for _ = 1,5 do
+        local orb = Utilities.CreatePart(rootPart.CFrame, {
+            Size = Vector3.new(3,3,3),
+            Color = Color3.new(1,0,0),
+            Shape = Enum.PartType.Ball,
+            Anchored = true,
+            CanCollide = false
+        })
+        table.insert(orbitals, orb)
+        services.Debris:AddItem(orb, 7.5)
     end
 
-    -- Update orbital positions
-    local angle = 0
     task.spawn(function()
-        while #orbitalParts > 0 do
-            for i, part in ipairs(orbitalParts) do
-                if not part.Parent then
-                    table.remove(orbitalParts, i)
+        local angle = 0
+        while #orbitals > 0 do
+            for i, orb in ipairs(orbitals) do
+                if not orb.Parent then
+                    table.remove(orbitals, i)
                     break
                 end
-
+                
                 local offset = Vector3.new(
-                    math.cos(angle + (i-1)*(math.pi*2/#orbitalParts)) * radius,
+                    math.cos(angle + (i-1)*(math.pi*2/#orbitals)) * radius,
                     0,
-                    math.sin(angle + (i-1)*(math.pi*2/#orbitalParts)) * radius
+                    math.sin(angle + (i-1)*(math.pi*2/#orbitals)) * radius
                 )
-                part.Position = rootPart.Position + offset
+                orb.Position = rootPart.Position + offset
             end
             angle += 0.025
             task.wait(0.01)
@@ -198,35 +234,120 @@ function Commands.orbit(player)
     end)
 end
 
---[[
-    EVENT HANDLERS
-    Manages game events and player connections
---]]
-local function HandleChatCommand(player, message)
-    -- Parse command format: "/command arg"
-    if message:sub(1, 1) ~= "/" then return end
-    
-    local commandParts = string.split(message:sub(2):lower(), " ")
-    local command = commandParts[1]
-    local arg = commandParts[2]
-
-    -- Execute valid command
-    if Commands[command] then
-        task.spawn(function()
-            Commands[command](player, arg)
-        end)
+function Commands.settime(player, arg)
+    local timeMap = {
+        morning = 8, noon = 12, afternoon = 16,
+        evening = 19, midnight = 0, dawn = 6
+    }
+    if timeMap[arg] then
+        game.Lighting.TimeOfDay = timeMap[arg]
+        Utilities.SendResponse(player, "Time set to: "..arg)
     end
 end
 
-local function InitializePlayer(player)
-    player.Chatted:Connect(function(msg)
-        HandleChatCommand(player, msg)
-    end)
+function Commands.size(player, arg)
+    if Utilities.ValidateNumber(arg, 0.1, 10) then
+        Character.ScaleR15(player.Character.Humanoid, tonumber(arg))
+        Utilities.SendResponse(player, "Scaled to: "..arg)
+    else
+        Utilities.SendResponse(player, "Invalid scale (0.1-10)")
+    end
 end
 
---[[
-    MAIN INITIALIZATION
-    Starts the game systems
---]]
-local services = InitializeServices()
-game.Players.PlayerAdded:Connect(InitializePlayer)
+function Commands.followers(player, arg)
+    if not Utilities.ValidateNumber(arg, 1, 20) then return end
+    
+    local function CreateFollower()
+        local npc = game.Players:CreateHumanoidModelFromUserId(26266254)
+        npc.Parent = workspace
+        npc:PivotTo(CFrame.new(math.random(-250,250), 0, math.random(-250,250)))
+        
+        local path = services.Pathfinding:CreatePath()
+        local humanoid = npc.Humanoid
+        
+        humanoid.Touched:Connect(function(hit)
+            if hit.Parent:FindFirstChild("Humanoid") then
+                hit.Parent.Humanoid:TakeDamage(100)
+            end
+        end)
+
+        task.spawn(function()
+            while npc.Parent and player.Character do
+                path:ComputeAsync(npc.HumanoidRootPart.Position, 
+                    player.Character.HumanoidRootPart.Position)
+                local waypoints = path:GetWaypoints()
+                humanoid:MoveTo(waypoints[3] and waypoints[3].Position or 
+                    player.Character.HumanoidRootPart.Position)
+                task.wait(0.5)
+            end
+        end)
+
+        services.Debris:AddItem(npc, 15)
+    end
+
+    for _ = 1,tonumber(arg) do CreateFollower() end
+end
+
+function Commands.agemeta(player, arg)
+    local prototype = { Age = 21 }
+    local meta = { __index = prototype }
+    local data = setmetatable({}, meta)
+    
+    Utilities.SendResponse(player, "Initial age: "..data.Age)
+    if Utilities.ValidateNumber(arg, 0, 150) then
+        data.Age = tonumber(arg)
+        Utilities.SendResponse(player, "New age: "..data.Age)
+    end
+end
+
+function Commands.wraptime(player)
+    local shockwave = Utilities.CreatePart(
+        player.Character.HumanoidRootPart.Position,
+        {
+            Size = Vector3.new(0,0,0),
+            Color = Color3.new(1,1,1),
+            Anchored = true,
+            CanCollide = false,
+            Shape = Enum.PartType.Ball
+        }
+    )
+    shockwave.Transparency = 0.5
+    
+    services.TS:Create(shockwave, TweenInfo.new(5), {
+        Size = Vector3.new(200,200,200),
+        Transparency = 1
+    }):Play()
+
+    local blur = Instance.new("BlurEffect")
+    blur.Size = 15
+    blur.Parent = game.Lighting
+    services.TS:Create(blur, TweenInfo.new(5), {Size = 0}):Play()
+
+    local humanoid = player.Character.Humanoid
+    humanoid.JumpPower = 75
+    workspace.Gravity = 30
+    
+    task.wait(8)
+    workspace.Gravity = 196.2
+    if humanoid then humanoid.JumpPower = 50 end
+    
+    services.Debris:AddItem(shockwave, 5)
+    services.Debris:AddItem(blur, 5)
+end
+
+--==== Command Processor ====--
+game.Players.PlayerAdded:Connect(function(player)
+    player.Chatted:Connect(function(msg)
+        if msg:sub(1,1) ~= "/" then return end
+        
+        local commandParts = string.split(msg:sub(2):lower(), " ")
+        local command = commandParts[1]
+        local arg = commandParts[2]
+
+        if Commands[command] then
+            task.spawn(function()
+                Commands[command](player, arg)
+            end)
+        end
+    end)
+end)
